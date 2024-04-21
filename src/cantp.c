@@ -3,18 +3,15 @@
 #include <string.h>
 #include <pthread.h>
 
+#include "cantp.h"
+
 #define REVEIVER_STATUS_IDLE 0 
 #define REVEIVER_STATUS_FC 1 //需要回复FC
 #define REVEIVER_STATUS_FC_OVFLW 2 //FF中的长度溢出
 #define REVEIVER_STATUS_CF 3 //等待CF
 
-int receiverStatus;
-int receiverLength; //需要接收的数据长度
+CAN_TP_RX_Ctrl CanTP_RX_Ctrl;
 unsigned char reveicerBuff[4095];
-int receiverIndex; //已接收到的数据长度
-int receiverExpectedSN; //期待接收的下一個CF的SN值
-int receiverReqSendFC; //true:请求发送FC Frame
-
 pthread_t myThread;
 
 void sendDataToUds()
@@ -29,7 +26,7 @@ void sendFCMessage()
 
 void showReceiverBuff()
 {
-    for (int  i = 0; i < receiverIndex; i++)
+    for (int  i = 0; i < CanTP_RX_Ctrl.receiverIndex; i++)
     {
         printf("0x%X ", reveicerBuff[i]);
     }
@@ -55,7 +52,7 @@ void receiveMessage(char* data, int length)
         sendDataToUds();
     } else if (1 == frameType) {
         /* FF */
-        if (REVEIVER_STATUS_IDLE == receiverStatus) {
+        if (REVEIVER_STATUS_IDLE == CanTP_RX_Ctrl.receiverStatus) {
             int fflength = 0;
             printf("tempdata[0]:%d\n", tempdata[0]);
             fflength = (fflength | (tempdata[0] & 0x0F)) << 8;
@@ -63,44 +60,43 @@ void receiveMessage(char* data, int length)
             fflength = fflength | tempdata[1];
             printf("fflength222:%d\n", fflength);
             printf("fflength333:%d\n", fflength);
-            receiverLength = fflength;
+            CanTP_RX_Ctrl.receiverLength = fflength;
 
-            if (receiverLength <= 6) {
+            if (CanTP_RX_Ctrl.receiverLength <= 6) {
                 // sendDataToUds();
-                receiverStatus = REVEIVER_STATUS_IDLE; //空闲状态
-            } else if (receiverLength > 4096) {
-                receiverStatus = REVEIVER_STATUS_FC_OVFLW;
-                receiverReqSendFC = 1; //true
-
+                CanTP_RX_Ctrl.receiverStatus = REVEIVER_STATUS_IDLE; //空闲状态
+            } else if (CanTP_RX_Ctrl.receiverLength > 4096) {
+                CanTP_RX_Ctrl.receiverStatus = REVEIVER_STATUS_FC_OVFLW;
+                CanTP_RX_Ctrl.receiverReqSendFC = 1; //true
             }else {
-                memcpy(&reveicerBuff[receiverIndex], &tempdata[2], 6);
-                receiverIndex += 6;
-                receiverStatus = REVEIVER_STATUS_FC; 
+                memcpy(&reveicerBuff[CanTP_RX_Ctrl.receiverIndex], &tempdata[2], 6);
+                CanTP_RX_Ctrl.receiverIndex += 6;
+                CanTP_RX_Ctrl.receiverStatus = REVEIVER_STATUS_FC; 
 
-                receiverExpectedSN = 1U;
+                CanTP_RX_Ctrl.receiverExpectedSN = 1U;
 
-                receiverReqSendFC = 1; //true
+                CanTP_RX_Ctrl.receiverReqSendFC = 1; //true
 
                 showReceiverBuff();
             }
         }
     } else if (2 == frameType) {
         /* CF */
-        if (REVEIVER_STATUS_CF == receiverStatus) {
+        if (REVEIVER_STATUS_CF == CanTP_RX_Ctrl.receiverStatus) {
             int SN = tempdata[0] & 0X0F;
-            if (SN == receiverExpectedSN) {
-                int receiverOtherLength = receiverLength - receiverIndex;
+            if (SN == CanTP_RX_Ctrl.receiverExpectedSN) {
+                int receiverOtherLength = CanTP_RX_Ctrl.receiverLength - CanTP_RX_Ctrl.receiverIndex;
                 if (receiverOtherLength > 7) {
-                    memcpy(&reveicerBuff[receiverIndex], &tempdata[1], 7);
-                    receiverIndex += 7;
-                    receiverExpectedSN++;
+                    memcpy(&reveicerBuff[CanTP_RX_Ctrl.receiverIndex], &tempdata[1], 7);
+                    CanTP_RX_Ctrl.receiverIndex += 7;
+                    CanTP_RX_Ctrl.receiverExpectedSN++;
                     showReceiverBuff();
                 } else {
-                    memcpy(&reveicerBuff[receiverIndex], &tempdata[1], receiverOtherLength);
-                    receiverIndex += receiverOtherLength;
-                    receiverExpectedSN = 0;
+                    memcpy(&reveicerBuff[CanTP_RX_Ctrl.receiverIndex], &tempdata[1], receiverOtherLength);
+                    CanTP_RX_Ctrl.receiverIndex += receiverOtherLength;
+                    CanTP_RX_Ctrl.receiverExpectedSN = 0;
                     showReceiverBuff();
-                    receiverStatus = REVEIVER_STATUS_IDLE;
+                    CanTP_RX_Ctrl.receiverStatus = REVEIVER_STATUS_IDLE;
                 }
             } else {
                 printf("Error:expected SN Error!\n");
@@ -117,12 +113,12 @@ void receiveMessage(char* data, int length)
 
 void tp_receiver_process()
 {
-    if (receiverReqSendFC) {
-        switch (receiverStatus)
+    if (CanTP_RX_Ctrl.receiverReqSendFC) {
+        switch (CanTP_RX_Ctrl.receiverStatus)
         {
         case REVEIVER_STATUS_FC:
             sendFCMessage();
-            receiverStatus = REVEIVER_STATUS_CF;
+            CanTP_RX_Ctrl.receiverStatus = REVEIVER_STATUS_CF;
             break;
         case REVEIVER_STATUS_FC_OVFLW:
             sendFCMessage();
@@ -169,11 +165,11 @@ int main(int argc, char const *argv[])
 
     initThread();
 
-    receiverStatus = 0;
-    receiverLength = 0;
+    CanTP_RX_Ctrl.receiverStatus = 0;
+    CanTP_RX_Ctrl.receiverLength = 0;
     memset(reveicerBuff, 0, 4095);
-    receiverIndex = 0;
-    receiverExpectedSN = 0;
+    CanTP_RX_Ctrl.receiverIndex = 0;
+    CanTP_RX_Ctrl.receiverExpectedSN = 0;
 
     unsigned char testarray[8] = {0x10, 0x14, 0x2E, 0xF1, 0x90, 0x01, 0x02, 0xF1};
     receiveMessage(testarray, 8);
